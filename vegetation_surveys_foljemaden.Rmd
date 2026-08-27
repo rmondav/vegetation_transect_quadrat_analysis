@@ -1,0 +1,721 @@
+---
+title: "Vegetation_surveys_foljemaden"
+author: "RMondav"
+date: "2024-07-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("openxlsx")
+wkdir <- "/Users/Rhiannon/Documents/2023/Lund_universitetet"
+fwkdir <- paste0(wkdir,
+                 "/Faltarbeter_grejer/field_days/transect_vegetation_data")
+projdir <- paste0(wkdir,"/Data_analyses_foljemaden")
+figdir <- paste0(projdir,"/graphs")
+tabledir <- paste0(projdir,"/tables")
+scriptdir <- paste0(projdir,"/scripts")
+
+```
+
+read in data from excel spreadsheets
+
+```{r read in veg survey data and lightly process}
+library(openxlsx) #v4.2.5.2
+library(dplyr) #v1.1.4
+library(lubridate) #v1.9.3
+
+# the survey data file name and location
+vs_ss <- paste0(fwkdir,"/veg_transect_data.xlsx")
+# vegetation survey dates 
+survey_dates = c(
+  "20aug2021","24may2022","23jun2022","5aug2022","26aug2022","21jun2023",
+  "11aug2023","7jun2024","22aug2024")
+# survey location information
+quads_info <- read.csv(paste0(fwkdir,"/quadrant_location_codes.csv"))
+ 
+    
+# read in each spreadsheet, transpose, and assign to variable
+for (sdate in survey_dates) {
+  # build sheet name for each date
+  ssheet = paste0(sdate,"_grnd_cvr")
+  # read in spreadsheet
+  x <- read.xlsx(vs_ss, ssheet, rowNames = T)
+  # transpose spreadsheet and retain dataframe structure
+  xt <- as.data.frame(t(x))
+  # format all columns as numbers
+  xt <- xt %>% mutate_all(as.numeric)
+  
+  # Remove rows with all missing values
+  xt_non_na_rows <- xt[rowSums(is.na(xt)) < ncol(xt), ]
+  xt <- xt_non_na_rows
+  # add survey date as date-formatted column
+  xt$survey_date <- format(as.Date(sdate, format = "%d%b%Y"), "%Y-%m-%d")
+  # assign sample names to column
+  xt$site_code <- row.names(xt)
+  # make new and unique row labels
+  row.names(xt) <- (paste(xt$site_code, xt$survey_date, sep = "_"))
+  xt$sample_code <- (paste(xt$site_code, xt$survey_date, sep = "_"))
+  # format date column
+  xt$survey_date <- as.Date(xt$survey_date, "%Y-%m-%d")
+  # join residue columns together
+  xt$total_debris_pcnt_cvr <- (
+    xt$logging_residue_pcnt_cvr + xt$other_debris_pcnt_cvr)
+  # join non-vegetated columns together
+  xt$non_vegttd_pcnt_cvr <- (
+    xt$total_debris_pcnt_cvr + xt$bare_ground_pcnt_cvr)
+  # save as csv in case needed for something else
+  filesave <- paste0(fwkdir,"/grnd_cvr_",sdate,".csv")
+  write.csv(xt, file = filesave, row.names = T)
+  # rename df with survey date for later use
+  assign(paste0("grnd_cvr_",sdate), xt)
+  # combine all dataframes
+  # but check if its the first df in the loop
+  if (sdate == "20aug2021") {
+    veg_quads_all <- xt
+  } else {
+      veg_quads_all <- rbind(veg_quads_all, xt)
+    }
+  # cleanup as you go
+  rm(x); rm(xt)
+}
+
+
+```
+
+## Plots
+
+variables that it would be interesting to examine for potential correlations:
+-growing days (total days with enough sunshine/ warmth since last clearcut)
+-water table depth
+-soil moisture
+-distance from dam
+-Reco, GPP, NEE, etc
+-
+
+```{r vegetation transect data processing, echo=FALSE}
+
+# process the location info
+# get absolute distance from ditch
+quads_info$abs_dist_ditch_m <- abs(quads_info$distance_from_ditch_m)
+# get relation to dam barrier
+quads_info$reltn_to_barrier <- "adjacent" #Brian transect
+quads_info$reltn_to_barrier[quads_info$distance_from_dam_m > 0] <- "downstream" 
+quads_info$reltn_to_barrier[quads_info$distance_from_dam_m < -5] <- "upstream"
+
+# calculate time since/before barrier placement
+veg_quads_all$days_from_dam <- 
+  as.numeric(veg_quads_all$survey_date - as.Date("2022-08-24"))
+
+# add info to vegetation data df
+veg_quads_all_info1 <- merge(veg_quads_all, quads_info, by = "site_code")
+# re-arrange columns
+veg_quads_all_info2 <- dplyr::relocate(
+  veg_quads_all_info1, where(is.character))
+veg_quads_all_info1 <- dplyr::relocate(veg_quads_all_info2, survey_date)
+veg_quads_all_info <- dplyr::relocate(veg_quads_all_info1, sample_code)
+  
+# save this compilation csv for publication of data
+filesave <- paste0(tabledir,"/transect_vegetation_aug2021_to_aug2024.csv")
+write.csv(veg_quads_all_info, file = filesave, row.names = F)
+
+
+
+
+# make list of ground-cover vegetation types recorded
+veg_transct_base_names <- 
+  c("logging_residue","other_debris","bare_ground","water","lichen",
+    "moss_sphagnum","moss_other","grass","deciduous_and_herbs","evergreen")
+# list of vegetation-only, not including other groundcover types
+veg_transct_types <- c("lichen", "moss_sphagnum","moss_other","grass",
+                       "deciduous_and_herbs","evergreen")
+# list of the cover information types recorded
+veg_transct_info_type <- c("_pcnt_cvr","_ht_cm")
+
+
+```
+
+
+```{r vegetation transect plots of heights and volumes, echo=FALSE}
+## no point in calculating volumes or dry mass conversion as the
+## height data is so patchy it introduces massive biases
+## uncomment lines below to see
+
+# max height analysis
+# maximum of each row for columns 11 to 20
+#veg_quads_all_info$max_ht_cm <- 
+#  apply(veg_quads_all_info[ ,12:21], MARGIN = 1, na.rm=T, FUN = max)
+# replace -inf with NA
+#veg_quads_all_info$max_ht_cm[!is.finite(
+#  veg_quads_all_info$max_ht_cm)] <- NA
+
+# mean height analysis
+# maximum of each row for columns 11 to 20
+#veg_quads_all_info$mean_ht_cm <- 
+#  apply(veg_quads_all_info[ ,12:21], MARGIN = 1, na.rm=T, FUN = mean)
+# replace NaN with NA
+#veg_quads_all_info$mean_ht_cm[!is.nan(veg_quads_all_info$mean_height_cm)] <- NA
+
+## calculate vegetation volume estimates
+# calculate area estimate for each vegetation type
+# make empty df with same rownames
+# vq_areas <- veg_quads_all[,FALSE]
+# # calc. area estimate of 1m by 1m quadrats
+# vq_areas$deciduous_and_herbs_area_m2 <- 
+#   (1*1) * veg_quads_all$deciduous_and_herbs_pcnt_cvr/100
+# 
+# 
+# # make another empty df
+# vq_hts <- veg_quads_all[,FALSE]
+# # collect heights
+# vq_hts$deciduous_and_herbs_ht_m <- 
+#   veg_quads_all_info$deciduous_and_herbs_ht_cm/100
+# 
+# # merge dfs by row names
+# vq_vols <- merge.data.frame(vq_areas,vq_hts, by=0)
+# # fix row names
+# row.names(vq_vols) <- vq_vols$Row.names
+# vq_vols$Row.names <- NULL
+# 
+# # calc. vol. estimates
+# vq_vols$deciduous_and_herbs_vol_m3 <- 
+#   vq_vols$deciduous_and_herbs_area_m2 * 
+#   vq_vols$deciduous_and_herbs_ht_m
+# 
+# # evergreen
+# # calc. area estimate of 1m by 1m quadrats
+# vq_vols$evergreen_area_m2 <- 
+#   (1*1) * veg_quads_all$evergreen_pcnt_cvr/100
+# # collect heights
+# vq_vols$evergreen_ht_m <- 
+#   veg_quads_all_info$evergreen_ht_cm/100
+# # calc. vol. estimates
+# vq_vols$evergreen_vol_m3 <- 
+#   vq_vols$evergreen_area_m2 * 
+#   vq_vols$evergreen_ht_m
+# # grass
+# # calc. area estimate of 1m by 1m quadrats
+# vq_vols$grass_area_m2 <- 
+#   (1*1) * veg_quads_all$grass_pcnt_cvr/100
+# # collect heights
+# vq_vols$grass_ht_m <- 
+#   veg_quads_all_info$grass_ht_cm/100
+# # calc. vol. estimates
+# vq_vols$grass_vol_m3 <- 
+#   vq_vols$grass_area_m2 * 
+#   vq_vols$grass_ht_m
+# 
+# # collate all volumes for an estimate of total veg vol per quadrat
+# df_vol <- vq_vols %>% select(ends_with("_vol_m3"))
+# df_vol$sum_m3 <- rowSums(df_vol, na.rm = T)
+#veg_quads_all_info$sum_m3 <- rowSums(df_vol, na.rm = T)
+
+# ## plot
+# library(ggplot2)
+# library(viridis)
+# library(Hmisc)
+# # plot vol estimates by date and dist from main drainage ditch
+# vol_fromditch_p <- 
+#   ggplot(veg_quads_all_info, aes(x=distance_from_ditch_m, y=sum_m3, 
+#                                  color =  transect_centre)) +
+#   geom_point() +
+#   scale_fill_viridis(discrete = T) +
+#   facet_wrap(~survey_date, nrow=3, ncol= 3)
+# vol_fromditch_p
+# 
+# # plot vol estimates by date and dist from barrier
+# vol_fromdam_p <- 
+#   ggplot(veg_quads_all_info, aes(x=distance_from_dam_m, y=sum_m3, 
+#                                  color =  transect_centre)) +
+#   geom_point() +
+#   scale_fill_viridis(discrete = T) +
+#   facet_wrap(~survey_date, nrow=3, ncol= 3)
+# vol_fromdam_p
+# 
+# # plot vol estimates by date and dist from barrier
+# vol_fromEC_p <- 
+#   ggplot(veg_quads_all_info, aes(x=survey_date, y=sum_m3, 
+#                                  fill =  distance_from_dam_m)) +
+#   geom_point() +
+#   scale_color_viridis(discrete = F, option = "viridis") +
+#   facet_wrap(~transect_centre, nrow=2, ncol= 2) +
+#   theme(axis.text.x = element_text(angle=45, hjust = 1, face = "plain")) +
+#   scale_x_date(breaks = veg_quads_all_info$survey_date,
+#                labels = scales::date_format("%d-%b-%Y"))
+# vol_fromEC_p
+# 
+# # plot average vol per date and plot all transects (EC towers) together 
+# # include mean as point and 1 sd range as line
+# vol_viol_p <- 
+#   ggplot(veg_quads_all_info, aes(x=transect_centre, y=sum_m3, 
+#                                  fill =  transect_centre)) +
+#     geom_violin(trim = F, alpha = 0.5) +
+#     scale_fill_viridis(discrete = T, option = "viridis") +
+#     stat_summary(fun.data = "mean_cl_boot", 
+#                geom = "pointrange",
+#                colour = "black",
+#                size = 0.2) +
+#     facet_wrap(~survey_date, nrow=3, ncol= 3) #+
+#   #theme(axis.text.x = element_text(angle=45, hjust = 1, face = "plain")) +
+#   #scale_x_date(breaks = veg_quads_all_info$survey_date,
+#                #labels = scales::date_format("%d-%b-%Y"))
+# vol_viol_p
+# # plot average vol per transects (EC towers) together 
+# vol_violEC_p <- 
+#   ggplot(veg_quads_all_info, aes(x=survey_date, y=sum_m3, 
+#                                  fill =  transect_centre)) +
+#     geom_violin(trim = F, alpha = 0.5) +
+#     scale_fill_viridis(discrete = T, option = "viridis") +
+#     stat_summary(fun.data = "mean_cl_boot", 
+#                geom = "pointrange",
+#                colour = "black",
+#                linewidth = 0.2) +
+#     facet_wrap(~transect_centre, nrow=2, ncol= 2) +
+#   theme(axis.text.x = element_text(angle=45, hjust = 1, face = "plain")) +
+#   scale_x_date(breaks = veg_quads_all_info$survey_date,
+#                labels = scales::date_format("%d-%b-%Y"))
+# vol_violEC_p
+# 
+# # plot date by EC tower with boxplot
+# vol_violEC_box_p <- ggplot(veg_quads_all_info, aes(x=transect_centre, y=sum_m3,
+#                                    fill =  transect_centre)) +
+#                                    geom_violin(trim = F, alpha = 0.5) +
+#      scale_fill_viridis(discrete = T, option = "viridis") +
+#      stat_summary(fun.data = "mean_cl_boot",
+#                   geom = "crossbar",colour = "black",linewidth = 0.5) +
+#     facet_wrap(~survey_date, nrow=3, ncol= 3)
+# vol_violEC_box_p
+# no point in calculating volumes or dry mass convesions as th e
+# height data is so patchy it introduces too many unknown biases
+```
+
+
+
+```{r vegetation height plots, transect, echo=FALSE}
+library(ggplot2) #v3.4.4
+library(viridis) #v0.6.2
+
+##set potential discrete colour schemes for manual use
+viridis(6)
+vcolors6 = c("#440154FF", "#414487FF", "#2A788EFF", "#22A884FF", "#7AD151FF", "#FDE725FF")
+viridis(12)
+vcolors12 = c("#440154FF", "#482173FF", "#433E85FF", "#38598CFF", "#2D708EFF", "#25858EFF","#1E9B8AFF", "#2BB07FFF" ,"#51C56AFF", "#85D54AFF", "#C2DF23FF", "#FDE725FF")
+viridis(3)
+vcolors3 = c("#21908CFF","#440154FF","#C2DF23FF")
+
+v4 = c("#440154FF", "#414487FF", "#7AD151FF", "#FDE725FF")
+
+#define useful factors
+veg_quads_all_info$reltn_to_barrier <- 
+  factor(veg_quads_all_info$reltn_to_barrier,
+         levels=c("upstream","adjacent","downstream"))
+
+#basic plot
+base_plot <-
+  ggplot(data = veg_quads_all_info,
+         aes(x = survey_date, y = max_ht_cm/100,
+             colour = reltn_to_barrier)) +
+  stat_summary(fun.y="mean", geom="line", aes(group = reltn_to_barrier)) +
+  scale_colour_manual(values = c("#21908CFF","#440154FF","#C2DF23FF")) +
+  geom_vline(aes(xintercept = as.Date("2022-08-24")),
+             colour="black", linewidth=0.5) +
+  geom_point(size = 1) +
+  theme(legend.position="right") +
+  labs(x= "date", y= "max height (m)", 
+       title = "max vegtn height - Följemaden") +
+  theme(axis.text.x = element_text(angle=45, hjust = 1, face = "plain")) +
+  scale_x_date(breaks = veg_quads_all_info$survey_date,
+               labels = scales::date_format("%Y-%b-%d"))
+
+## cycle through different vegetation classes/types and graph each
+# loop through df and make plots for each of the ten veg types recorded
+i = 0
+# setup loop
+for (v_type in veg_transct_base_names) {
+  # variables
+  y_data = paste0(v_type,"_ht_cm")
+  ytitle = paste0("mean ",v_type," height (m)")
+  ptitle = paste0(v_type," height - Följemaden")
+  pplot = paste0("ht_plot_",i)
+  # plot
+  vt_plot <- 
+    ggplot(data = veg_quads_all_info,
+           aes(x = survey_date, y = get(y_data)/100, 
+               colour = reltn_to_barrier)) +
+    stat_summary(fun.y="mean", geom="line", aes(group = reltn_to_barrier)) +
+    scale_colour_manual(values = c("#21908CFF","#440154FF","#C2DF23FF")) +
+    geom_vline(aes(xintercept = as.Date("2022-08-24")), 
+               colour="black", linewidth=1) +
+    geom_point(size = 1) +
+    theme(legend.position="none") +
+    labs(x= "date", y= ytitle, title = ptitle) +
+    theme(axis.text.x = element_text(angle=45, hjust = 1, face = "plain")) +
+    scale_x_date(breaks = veg_quads_all_info$survey_date,
+                 labels = scales::date_format("%Y-%b-%d"))
+  print(vt_plot)
+  # assign name to plot
+  assign(pplot, vt_plot)
+  #names(vt_plot) <- paste0("ht_plot_",i)
+  # increment counter
+  i = i + 1
+}
+
+#make legend
+library(cowplot)
+# extract the legend from one of the plots
+legend_ht <- get_legend(base_plot + theme(legend.box.margin = margin(0, 0, 0, 12)))
+# arrange graphs
+plot_grid(
+  ht_plot_0,ht_plot_5,ht_plot_6,ht_plot_7,ht_plot_8,
+  ht_plot_9,legend_ht,
+  ncol = 3, nrow = 3
+  ) # doesn't work s each graph overides the previous 
+
+#pretty plots
+library(gridExtra)
+#grid.arrange(max_ht_plot, mean_ht_plot, ncol = 2, widths=c(1,1))
+
+
+##save graphs to pdf
+a <- arrangeGrob(ht_plot_0,ht_plot_1,ht_plot_2,ht_plot_3,ht_plot_4,ht_plot_5,
+              ht_plot_6,ht_plot_7,ht_plot_8,ht_plot_9, ncol = 5, nrow = 2)
+#b <- arrangeGrob(ht_plot_10, ht_plot_11, legend_ht, ncol = 3, widths = c(1,1,0.3))
+  
+#c <- arrangeGrob(a,b, nrow = 2, heights = c(2,1))
+
+#ggsave(paste0(figdir,"/veg_transect_height_graphs_13sept2024.pdf"),c, 
+ #      dpi=600, height = 21.5, width = 14.8, units = "cm" )
+
+
+```
+
+
+```{r vegetation cover, transect, echo=FALSE}
+## basic processing and background plots
+
+# make df with the numeric data only
+veg_quads_cvr_info <- (veg_quads_all_info[ ,-12:-21]) #23 variables
+veg_quads_cvr_info <- (veg_quads_cvr_info[,-19:-20]) #21 variables
+#remove cols with all zeros
+veg_quads_cvr_info$lichen_pcnt_cvr <- NULL # 18 variables
+# remove rows with all zeros 
+veg_cvr_info <- 
+  veg_quads_cvr_info[rowSums(veg_quads_cvr_info[,2:10]) > 0,] # 643 obs
+
+# make df with just the veg data no info
+veg_cvr_only <- veg_cvr_info[,2:10] #643 obs x 9 vars
+
+# convert df to long format for use 
+# reformat df to long format
+library(tidyr)
+long_veg_cvr <- tidyr::pivot_longer(
+  veg_cvr_info, cols = 2:10, names_to = "cover_type",
+  values_to = "pcnt_cover") #5787 obs x 12 vars
+
+## plots
+# pcnt cover by date and by distance from  dam
+library(ggplot2) #v3.4.4
+pcnt_cvr_dbyd <- 
+  ggplot(long_veg_cvr, aes(
+    x=distance_from_dam_m, y=pcnt_cover,fill = cover_type)) +
+  geom_bar(position="stack", stat="identity", width = 1) +
+  ylim(0,120) +
+  scale_fill_brewer(palette = "Paired") +
+  facet_wrap(~survey_date)
+# save plot
+ggsave(paste0(figdir,"/veg_cvr_date_distfromdam.pdf"),pcnt_cvr_dbyd,
+       dpi=600, width = 21.5, height = 14.8, units = "cm" )
+
+
+
+# exploratory analyses: dimension reduction via PCA
+# step one: check for co-linearity of variables 
+library(psych)
+ppp <- psych::pairs.panels(veg_cvr_info[,2:10], gap = 0, pch=21) #no co-linears
+# save plot
+ggsave(paste0(figdir,"/veg_cvr_pairsplots.pdf"),ppp,
+       dpi=600, width = 21.5, height = 14.8, units = "cm" )
+# centre and scale the data ie get z-scores
+veg_cvr_zscores <- scale(veg_cvr_only, scale = T) #centering is included
+# check colinearity again
+pairs.panels(veg_cvr_zscores) #same as pre scaling-centering
+
+```
+
+
+
+```{r cluster analysis of ground/canopy cover data, PCA}
+
+# Principle components analysis from precomputed zscores 
+pcz <- stats::prcomp(veg_cvr_zscores)
+# Principle components analysis from scratch but same thing
+pc <- stats::prcomp(veg_cvr_only,
+             center = TRUE, #set centre of scale to zero
+            scale. = TRUE) #convert to variance ie sd = 1
+#attributes(pc)
+summary(pc); summary(pcz) #poor, same as scaling is same
+# check for colinearity 
+library(psych)
+psych::pairs.panels(pcz$x) #none, all coeffs are now zero
+# check PC axes
+pcz$rotation
+# plot 
+biplot(pcz)
+# check if PC has correlation with sample location
+# extract location and time relevant data 
+ydata <- veg_cvr_info[,16:21]
+#remove unwanted columns
+ydata <- ydata[,-3:-5]
+# test correlation between PC axes and env data
+EC_PCcorrSpear <- psych::corr.test(pcz$x, ydata, 
+                       use = "pairwise", method="spearman",
+                       adjust="holm", alpha=.05, ci=TRUE)
+
+# extract the correlations (spearmans r) and adjusted p-vals
+PCa_meta_corrS <- EC_PCcorrSpear$r 
+print(corr.test(pcz$x, ydata)$stars, quote=F) #repeated later and saved as csv!
+
+
+# Getting proportion of variance explained by PC1 and PC2 (eigenvalues)
+prop_var <- pcz$sdev^2 / sum(pcz$sdev^2) #used in graph to label PCaxes
+#check dist of eigenvalues visualy
+plot(prop_var) #dubious that there is much structure to the data
+#retrieve the coordinates
+scores <- as.data.frame(pcz$x)
+#add the transect centre location information
+scores$locatn <- veg_cvr_info$transect_centre
+#add sample date info
+scores$date <- as.factor(veg_cvr_info$survey_date)
+#get loadings of ground cover type
+loadings <- as.data.frame(pcz$rotation)
+#add ground cover type information
+loadings$grnd_cvr <- rownames(loadings)
+
+
+# Create biplot 
+#install.packages("ggrepel")
+library(ggrepel,ggplot)
+#variables
+okito_cols9 <- c("#000000" ,"#E69F00", "#56B4E9", "#009E73", "#F0E442", 
+              "#0072B2", "#D55E00", "#CC79A7", "#999999")
+PrGn9 <- hcl.colors(9, palette = "Purple-Green")
+dark2_9 <- hcl.colors(9, palette = "Dark 2")
+YOBrBl_9 <- hcl.colors(9, palette = "Lajolla")
+sunset_9 <- hcl.colors(9, palette = "sunset")
+shapes4 <- c(21, 22, 24, 25)
+
+# plot
+PCAplot <- ggplot(
+  data = scores, aes(x = PC1, y = PC2)) +
+  geom_point(aes(shape = factor(locatn),
+                 fill = factor(date),
+                 colour = factor(date)), size = 2) +
+  scale_shape_manual(values = shapes4) +
+  scale_fill_manual(values = rev(sunset_9)) +
+  scale_colour_manual(values = rev(sunset_9)) +
+  scale_x_continuous(name = paste0("PC1 (",PC1_exp," %)")) +
+  scale_y_continuous(name = paste0("PC2 (",PC2_exp," %)")) +
+  theme_bw() +
+  geom_segment(data = loadings, 
+               aes(x = 0, y = 0, xend = PC1 * 2, yend = PC2 * 2),
+               arrow = arrow(length = unit(0.3, "cm"), type = "open", angle = 25),
+               size = 0.7, color = "black") +
+  geom_text_repel(data = loadings,
+                   aes(x = PC1, y = PC2, label = rownames(loadings)),
+                       force = 30, max.overlaps = 20,
+                       size = 3, color = "black")
+
+PCAplot
+ggsave(paste0(figdir,"/PCA_vegetation_transects.pdf"),PCAplot,
+       dpi=600, width = 21.5, height = 14.8, units = "cm" )
+
+#re-iterate corrs with current metadata
+print(psych::corr.test(pcz$x, ydata)$stars, quote=F)
+#format as tibble
+PCA_ex_var_meta_stars <- tidyr::as_tibble(print(psych::corr.test(pcz$x, ydata)$stars, quote=F))
+rownames(PCA_ex_var_meta_stars) <- list("PCA1","PCA2","PCA3","PCA4","PCA5",
+                                        "PCA6","PCA7","PCA8","PCA9")
+#save as csv
+write.csv(PCA_ex_var_meta_stars, 
+          file = paste0(tabledir,"/PCA_explanatory_vars_metadata_wstars.csv"),
+          row.names = T, )
+
+
+
+######  the eigenvalues are rather dubious so will test significance of PCA
+#try metyhod PCA test first
+#install.packages("githubinstall")
+library(githubinstall)
+githubinstall("PCAtest")
+library(PCAtest)
+
+```
+
+    distance_from_dam_m distance_from_ditch_m days_from_dam
+PC1 0.09*               -0.03                 -0.1*        
+PC2 -0.24***            -0.03                 0.29***      
+PC3 0.11**              0.07                  -0.01        
+PC4 0.07                0                     0.05         
+PC5 0.05                0.08*                 0.06         
+PC6 -0.02               0.05                  -0.04        
+PC7 -0.06               -0.07                 -0.02        
+PC8 0.03                0.09*                 0.08*        
+PC9 0.01                0.03                  0.02  
+
+```{r cluster plots}
+# traditional analysis
+library(vegan)
+# axes lengths
+decorana(veg_cvr_only)
+# axes are generally longer than 3 so could use either linear or unimodal
+# 
+# but will show PCA here 
+pca <- rda(veg_cvr_info[,2:10], scale = T, centre = T)
+# example plot of pca analysis
+f2 <- as.numeric (as.factor (abs(veg_cvr_info$days_from_dam)))
+f1 <- as.numeric (as.factor (veg_cvr_info$transect_centre))
+ordiplot (pca, display = 'sites', type = 'n')
+points (pca, pch = f1, col = f2)
+
+#jaccard (Ruzicka index)
+veg_jacc <- 
+  vegan::vegdist(veg_cvr_only, method = "jaccard", 
+                 binary = F, diag = F, upper = T, na.rm = F)
+
+################# clustering and graphing ##################
+# unimodal analyses
+# get distance matrix using abund weighted metric index
+# scale data but dont centre on zero
+dist_method = "euc"
+cluster_method = "ward.D2"
+veg_cvr_only_scld <- scale(veg_cvr_only)
+veg_dist <- vegdist(
+  veg_cvr_only_scld, method = dist_method, binary = F, diag = F)
+# find clusters using ward 
+veg_dist_clstr <- hclust(veg_dist, method = cluster_method)
+plot(veg_dist_clstr)
+# get order of leaves
+veg_dist_clstr$order
+#pretty plot
+suppressPackageStartupMessages(library(dendextend))
+avg_dend_obj <- as.dendrogram(veg_dist_clstr)
+order.dendrogram(avg_dend_obj)
+stopifnot(avg_dend_obj$order == order.dendrogram(avg_dend_obj))
+
+avg_col_dend <- color_branches(
+  avg_dend_obj, k = 8,  groupLabels = T)#, 
+  #col = c("#440154FF", "#38598CFF", "#7AD151FF", "#FDE725FF"))
+plot(avg_col_dend)
+
+
+
+# assign each sample to one of 8 clusters
+cut_clstr_k <- cutree(veg_dist_clstr, k = 8)
+# write the cluster identity for each sample into orignal df
+veg_cvr_info_clstr <- dplyr::mutate(veg_cvr_info, cluster = cut_clstr_k)
+# assign letters to each cluster
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 1] <- "A"
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 2] <- "B"
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 3] <- "C"
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 4] <- "D"
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 5] <- "E"
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 6] <- "F"
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 7] <- "G"
+veg_cvr_info_clstr$cluster[veg_cvr_info_clstr$cluster == 8] <- "H"
+# make clusters factor
+as.factor(veg_cvr_info_clstr$cluster)
+# see how evenly the samples were divided
+#count(veg_cvr_info_clstr, cluster)
+# check if clusters correlate to location by plotting as lat-long
+# nope plot as dist from dam and ditch as proxy
+clst_plot3by3 <- ggplot(veg_cvr_info_clstr, aes(
+  x = veg_cvr_info_clstr$distance_from_ditch_m,
+  y = veg_cvr_info_clstr$distance_from_dam_m,
+  color = veg_cvr_info_clstr$cluster)) +
+  facet_wrap(~survey_date, nrow=3, ncol= 3)
+clst_plot2by5 <- ggplot(veg_cvr_info_clstr, aes(
+  x = veg_cvr_info_clstr$distance_from_ditch_m,
+  y = veg_cvr_info_clstr$distance_from_dam_m,
+  fill = veg_cvr_info_clstr$cluster)) +
+  facet_wrap(~survey_date, nrow=2, ncol= 5)
+
+# get colour palette  codes
+library("RColorBrewer")
+brewer.pal(9, "Paired")
+paired_9 <- c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00","#CAB2D6")
+
+# plot
+vcldate2by5 <- clst_plot2by5 +
+  scale_y_reverse() +
+  geom_point(size = 2, col = "black", pch = 21) +
+  scale_fill_manual(name = " vegetation\n community", 
+                     values=c( "#1F78B4", "#33A02C", "#FB9A99", "#FF7F00", "#B2DF8A","#CAB2D6","#FDBF6F","#A6CEE3")) +
+  geom_hline(aes(yintercept = 0, linetype = "weir"),
+             color = "black") +
+  geom_vline(aes(xintercept = 0, linetype = " main\n ditch"),
+             color = "blue") +
+  theme(legend.position = c(1, 0),
+        legend.justification = c(1, 0),
+        legend.background = element_blank(),
+        panel.background = element_blank(),
+        panel.grid.major = element_line(
+          colour = "lightgrey", linewidth  = 0.7),
+        panel.border=element_rect(
+          colour="black", fill = NA),) +
+  scale_linetype_manual(name = "", values = c(1,2),
+                        guide = guide_legend(override.aes = list(
+                          color = c("black", "blue")))) +
+  labs(x = "distance from ditch (m)", y =  "distance from barrier (m)")
+vcldate2by5
+
+
+# save graph
+#install.packages("svglite")
+library(svglite)
+ggsave(paste0(figdir,"/veg_community_clustered_siteloctn_date_by_oct2024.svg"),
+vcldate2by5, dpi=600, height = 21.5, width = 14.8, units = "cm" )
+# open graph in inkscape and edit the legend lines to match graph due to 
+# vline + hline  legend cross symbol issue
+
+# get information about the clusters
+# make a barchart to visualise info
+# Get the stacked barplot
+
+# remove suffix from column names so legend is succinct
+colnames(veg_cvr_info_clstr)<-gsub("_pcnt_cvr","",colnames(veg_cvr_info_clstr))
+
+# factor for color fill is veg type
+long_veg_cvr_clstr <- tidyr::pivot_longer(
+veg_cvr_info_clstr, cols = 2:10,
+names_to = "cover_type",
+values_to = "pcnt_cover")
+
+# percentage column graph of vegetation clusters
+bar_veg_cvr_clstr <-
+    ggplot(long_veg_cvr_clstr, aes(
+        x=cluster, y=pcnt_cover,fill = cover_type)) +
+  # "fill" makes the plot percentages rather than sums
+    geom_bar(position="fill", stat="identity") +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_brewer(palette = "Paired") +
+    theme(legend.position = "right", 
+        panel.background = element_blank()) +
+    labs(x = "vegetation community cluster and its indicator cover type", 
+         y = "ground-canopy cover (%)")
+
+bar_veg_cvr_clstr
+ggsave(paste0(figdir,"/veg_community_clusters_colgraph_oct2024.svg"),
+bar_veg_cvr_clstr, dpi=600, height = 21.5, width = 14.8, units = "cm" )
+
+library(gridExtra)
+##combine graphs  and view on screen
+grid.arrange(vcldate2by5, bar_veg_cvr_clstr, ncol = 2, widths=c(2,1))
+##save graphs to pdf
+vc <- arrangeGrob(vcldate2by5, bar_veg_cvr_clstr, ncol=2, widths=c(2,1)) 
+ggsave(paste0(figdir,"/veg_transects_clustering_101024.pdf"),vc, dpi=300, width = 21.5, height = 14.8, units = "cm" )
+
+```
+
+
+
