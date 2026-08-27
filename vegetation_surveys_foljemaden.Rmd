@@ -120,7 +120,9 @@ veg_quads_all_info <- dplyr::relocate(veg_quads_all_info1, sample_code)
 filesave <- paste0(tabledir,"/transect_vegetation_aug2021_to_aug2024.csv")
 write.csv(veg_quads_all_info, file = filesave, row.names = F)
 
-
+# public available data DOI
+# reserved DOI for the csv on figshare
+10.6084/m9.figshare.33340308
 
 
 # make list of ground-cover vegetation types recorded
