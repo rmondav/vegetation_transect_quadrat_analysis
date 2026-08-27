@@ -84,9 +84,9 @@ for (sdate in survey_dates) {
 
 ```
 
-## Plots
+## Analyses
 
-variables that it would be interesting to examine for potential correlations:
+variables of interest to examine for correlations:
 -growing days (total days with enough sunshine/ warmth since last clearcut)
 -water table depth
 -soil moisture
@@ -716,6 +716,10 @@ grid.arrange(vcldate2by5, bar_veg_cvr_clstr, ncol = 2, widths=c(2,1))
 ##save graphs to pdf
 vc <- arrangeGrob(vcldate2by5, bar_veg_cvr_clstr, ncol=2, widths=c(2,1)) 
 ggsave(paste0(figdir,"/veg_transects_clustering_101024.pdf"),vc, dpi=300, width = 21.5, height = 14.8, units = "cm" )
+
+
+## some of these graphs are available on the poster, DOI:
+10.6084/m9.figshare.30294394
 
 ```
 
